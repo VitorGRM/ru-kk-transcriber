@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mixed Russian / Kazakh Transcriber</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">RU<span class="slash">/</span>KK</span>
+    <div>
+      <h1>Mixed Russian / Kazakh Transcriber</h1>
+      <p class="sub">Code-switching speech recognition that runs entirely on this computer.</p>
+    </div>
+  </div>
+  <div class="hw" id="hardware">Checking hardware…</div>
+</header>
+
+<main>
+  <!-- ---------------- Step 1: input ---------------- -->
+  <section class="card" id="input-card">
+    <h2><span class="step">1</span> Choose audio</h2>
+    <div class="dropzone" id="dropzone" tabindex="0" role="button"
+         aria-label="Choose an audio or video file">
+      <svg viewBox="0 0 24 24" class="dz-icon" aria-hidden="true">
+        <path d="M12 16V4m0 0L8 8m4-4 4 4M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>
+      </svg>
+      <p class="dz-main">Drop a file here, or <button type="button" class="linklike" id="browse">browse</button></p>
+      <p class="dz-sub">Audio or video — mp3, wav, m4a, ogg, opus, flac, mp4, mkv, webm…</p>
+      <input type="file" id="file-input" accept="audio/*,video/*" hidden>
+    </div>
+    <div class="filepill" id="filepill" hidden>
+      <span class="fp-name" id="fp-name"></span>
+      <span class="fp-meta" id="fp-meta"></span>
+      <button type="button" class="ghost" id="fp-clear">Remove</button>
+    </div>
+  </section>
+
+  <!-- ---------------- Step 2: settings ---------------- -->
+  <section class="card" id="settings-card">
+    <h2><span class="step">2</span> Settings</h2>
+
+    <div class="grid">
+      <label class="field">
+        <span class="lbl">Model</span>
+        <select id="model"></select>
+        <span class="hint" id="model-hint">large-v3 is the most accurate for Kazakh.</span>
+      </label>
+
+      <label class="field">
+        <span class="lbl">Language routing</span>
+        <select id="routing">
+          <option value="fast">Fast — trust language detection</option>
+          <option value="balanced" selected>Balanced — resolve ambiguous parts (recommended)</option>
+          <option value="maximum">Maximum — decode every part twice</option>
+        </select>
+        <span class="hint" id="routing-hint"></span>
+      </label>
+
+      <label class="field">
+        <span class="lbl">Beam size <output id="beam-out">5</output></span>
+        <input type="range" id="beam" min="1" max="10" value="5">
+        <span class="hint">Higher searches more alternatives. 5 is the sweet spot.</span>
+      </label>
+
+      <label class="field">
+        <span class="lbl">Processing device</span>
+        <select id="device">
+          <option value="auto" selected>Automatic</option>
+          <option value="cuda">GPU (CUDA)</option>
+          <option value="cpu">CPU</option>
+        </select>
+        <span class="hint" id="device-hint"></span>
+      </label>
+    </div>
+
+    <details class="advanced">
+      <summary>Advanced</summary>
+      <div class="grid">
+        <label class="field wide">
+          <span class="lbl">Custom vocabulary</span>
+          <textarea id="hotwords" rows="2"
+            placeholder="Names, places, jargon — e.g. Алматы, Нұрсұлтан, Достык, ЖСН"></textarea>
+          <span class="hint">Terms the model should expect. Helps most with proper nouns.</span>
+        </label>
+        <label class="field">
+          <span class="lbl">Silence sensitivity <output id="vad-out">0.50</output></span>
+          <input type="range" id="vad" min="0.1" max="0.9" step="0.05" value="0.5">
+          <span class="hint">Lower picks up quieter speech; higher ignores more noise.</span>
+        </label>
+        <label class="field">
+          <span class="lbl">Language switch sensitivity <output id="sil-out">600</output> ms</span>
+          <input type="range" id="silence" min="200" max="1500" step="50" value="600">
+          <span class="hint">A pause at least this long is treated as a point where the
+            speaker may have changed language. Lower it if switches happen mid-sentence.</span>
+        </label>
+        <label class="checkfield">
+          <input type="checkbox" id="context" checked>
+          <span>
+            <strong>Carry context between segments</strong>
+            <em>Keeps terminology and punctuation consistent. Turn off if you see repeated text.</em>
+          </span>
+        </label>
+      </div>
+    </details>
+
+    <button class="primary" id="start" disabled>Transcribe</button>
+  </section>
+
+  <!-- ---------------- Progress ---------------- -->
+  <section class="card" id="progress-card" hidden>
+    <h2>Working…</h2>
+    <div class="bar"><div class="bar-fill" id="bar-fill"></div></div>
+    <p class="status" id="status">Starting…</p>
+    <div class="livefeed" id="livefeed" aria-live="polite"></div>
+    <p class="note" id="first-run-note" hidden>
+      The first run downloads the model (about 3 GB for large-v3). Later runs start instantly.
+    </p>
+  </section>
+
+  <!-- ---------------- Result ---------------- -->
+  <section class="card" id="result-card" hidden>
+    <div class="result-head">
+      <h2><span class="step">3</span> Transcript</h2>
+      <div class="stats" id="stats"></div>
+    </div>
+
+    <audio id="player" controls preload="none"></audio>
+
+    <div class="tabs" role="tablist">
+      <button class="tab active" data-view="text" role="tab">Text</button>
+      <button class="tab" data-view="segments" role="tab">Segments &amp; languages</button>
+    </div>
+
+    <!-- Text view: the editable, copyable box -->
+    <div class="view" id="view-text">
+      <div class="toolbar">
+        <button class="ghost" id="copy">Copy all</button>
+        <button class="ghost" id="select-all">Select all</button>
+        <span class="spacer"></span>
+        <label class="inline-check">
+          <input type="checkbox" id="show-tags"> Mark language changes
+        </label>
+        <span class="counter" id="counter"></span>
+      </div>
+      <textarea id="transcript" class="transcript" spellcheck="false"
+        aria-label="Transcript — editable"></textarea>
+      <p class="hint">This box is fully editable. Your edits are kept when you export.</p>
+    </div>
+
+    <!-- Segment view: per-segment language control -->
+    <div class="view" id="view-segments" hidden>
+      <div class="toolbar">
+        <label class="inline-check">
+          <input type="checkbox" id="only-uncertain"> Show only uncertain segments
+        </label>
+        <span class="spacer"></span>
+        <span class="counter" id="seg-counter"></span>
+      </div>
+      <p class="hint segnote">
+        Each segment shows the language it was decoded as. If one is wrong, switch it —
+        the audio for that segment is transcribed again in the other language.
+      </p>
+      <div id="segments"></div>
+    </div>
+
+    <div class="exports">
+      <span class="lbl">Download</span>
+      <button class="ghost" data-fmt="txt">Plain text</button>
+      <button class="ghost" data-fmt="tagged">Text with language tags</button>
+      <button class="ghost" data-fmt="srt">SRT subtitles</button>
+      <button class="ghost" data-fmt="vtt">WebVTT</button>
+      <button class="ghost" data-fmt="json">JSON</button>
+    </div>
+  </section>
+
+  <div class="errorbox" id="error" hidden></div>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
