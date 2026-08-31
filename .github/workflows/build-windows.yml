@@ -20,7 +20,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pyinstaller==6.11.1
+          # Not pinned: the packaging hooks have to keep up with the numpy and
+          # onnxruntime releases that requirements.txt resolves to.
+          pip install --upgrade pyinstaller
+          python -c "import PyInstaller, numpy; print('PyInstaller', PyInstaller.__version__, '| numpy', numpy.__version__)"
 
       - name: Build
         run: pyinstaller --noconfirm --clean transcriber.spec

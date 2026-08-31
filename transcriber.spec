@@ -7,8 +7,10 @@ datas, binaries, hiddenimports = [], [], []
 # These packages carry data or native libraries that PyInstaller cannot infer:
 # the Silero VAD model, the CTranslate2 and ONNX Runtime DLLs, the bundled
 # ffmpeg binary, and the tokenizer's Rust extension.
+# numpy is here because its 2.x layout loads several submodules lazily
+# (numpy._core._exceptions among them) and static analysis does not see them.
 for pkg in ("faster_whisper", "ctranslate2", "onnxruntime", "av",
-            "imageio_ffmpeg", "tokenizers", "huggingface_hub"):
+            "imageio_ffmpeg", "tokenizers", "huggingface_hub", "numpy"):
     d, b, h = collect_all(pkg)
     datas += d
     binaries += b
