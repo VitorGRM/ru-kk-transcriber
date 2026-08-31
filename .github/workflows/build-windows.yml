@@ -91,6 +91,64 @@ jobs:
           if (-not $ok) { throw "The packaged app did not serve /api/system." }
           Write-Host "The packaged app started and answered."
 
+      - name: Check an upload reaches disk
+        shell: pwsh
+        run: |
+          # /api/system is a GET, so it exercises neither multipart parsing nor the
+          # frozen build's data directory — which sits next to the executable and
+          # has to be writable. Post a real file to cover both.
+          $p = Start-Process -PassThru -FilePath dist/RU-KK-Transcriber/RU-KK-Transcriber.exe `
+                 -RedirectStandardOutput up-stdout.txt -RedirectStandardError up-stderr.txt
+
+          # One second of silent 16 kHz mono PCM.
+          $sr = 16000; $dataLen = $sr * 2
+          $ms = New-Object System.IO.MemoryStream
+          $bw = New-Object System.IO.BinaryWriter($ms)
+          $bw.Write([byte[]][char[]]"RIFF"); $bw.Write([int](36 + $dataLen))
+          $bw.Write([byte[]][char[]]"WAVE"); $bw.Write([byte[]][char[]]"fmt ")
+          $bw.Write([int]16); $bw.Write([int16]1); $bw.Write([int16]1)
+          $bw.Write([int]$sr); $bw.Write([int]($sr * 2)); $bw.Write([int16]2); $bw.Write([int16]16)
+          $bw.Write([byte[]][char[]]"data"); $bw.Write([int]$dataLen)
+          $bw.Write((New-Object byte[] $dataLen))
+          $bw.Flush()
+          [System.IO.File]::WriteAllBytes("$PWD/probe.wav", $ms.ToArray())
+
+          $base = $null
+          for ($i = 0; $i -lt 20; $i++) {
+            Start-Sleep -Seconds 3
+            if ($p.HasExited) { break }
+            foreach ($port in 8000..8004) {
+              try {
+                $r = Invoke-WebRequest "http://127.0.0.1:$port/api/system" -TimeoutSec 3 -UseBasicParsing
+                if ($r.StatusCode -eq 200) { $base = "http://127.0.0.1:$port"; break }
+              } catch { }
+            }
+            if ($base) { break }
+          }
+          if (-not $base) {
+            Get-Content up-stdout.txt, up-stderr.txt -ErrorAction SilentlyContinue
+            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+            throw "The app did not come up for the upload check."
+          }
+
+          try {
+            $resp = Invoke-RestMethod "$base/api/upload" -Method Post -Form @{ file = Get-Item probe.wav }
+          } catch {
+            Get-Content up-stdout.txt, up-stderr.txt -ErrorAction SilentlyContinue
+            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+            throw "Upload failed: $_"
+          }
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+
+          Write-Host "Upload response: $($resp | ConvertTo-Json -Compress)"
+          if (-not $resp.job_id) { throw "The upload returned no job id." }
+          if ([math]::Abs($resp.duration - 1.0) -gt 0.2) {
+            throw "Expected a 1 s file, got $($resp.duration) s -- the bundled ffmpeg did not decode it."
+          }
+          $stored = Get-ChildItem dist/RU-KK-Transcriber/data/uploads -ErrorAction SilentlyContinue
+          if (-not $stored) { throw "Nothing was written to the data folder beside the executable." }
+          Write-Host "Stored beside the exe: $($stored.Name -join ', ')"
+
       - name: Zip
         shell: pwsh
         run: Compress-Archive -Path dist/RU-KK-Transcriber/* -DestinationPath RU-KK-Transcriber-windows.zip
