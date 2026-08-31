@@ -1,5 +1,5 @@
 @echo off
-REM Start the transcriber and open it in your browser.
+REM Start the transcriber. It opens in its own window -- no browser involved.
 setlocal
 cd /d "%~dp0"
 
@@ -14,5 +14,6 @@ REM libraries have to be on PATH. Harmless when they are not installed.
 for /f "delims=" %%i in ('.venv\Scripts\python -c "import pathlib,site;print(';'.join(str(p) for b in site.getsitepackages() for p in (pathlib.Path(b)/'nvidia').glob('*/bin') if p.is_dir()))" 2^>nul') do set "NVBIN=%%i"
 if defined NVBIN set "PATH=%NVBIN%;%PATH%"
 
-.venv\Scripts\python -m app.main
-pause
+REM pythonw keeps this console window out of the way; the app draws its own.
+REM Swap it for python.exe if you want to watch the log live instead.
+.venv\Scripts\pythonw -m app.main

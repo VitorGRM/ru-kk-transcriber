@@ -92,10 +92,17 @@ not that the word-level text is perfect at that model size.
 
 Download **`RU-KK-Transcriber-windows.zip`** from the
 [latest release](../../releases/latest), unzip it, and double-click
-`RU-KK-Transcriber.exe`. A console window opens and your browser follows.
+`RU-KK-Transcriber.exe`. It opens in **its own window** — no browser, no console, and
+nothing to install first.
 
-That build runs on the **CPU**. If you have an NVIDIA GPU and want the speed, use the
-source install below instead.
+The window is drawn by the Microsoft **WebView2** runtime, which Windows 11 and most
+up-to-date Windows 10 machines already have. If yours does not, the app downloads
+Microsoft's official installer (about 2 MB) on the first launch and runs it silently;
+it normally needs no admin rights. If that step cannot complete, the app says so and
+opens in your browser instead rather than showing you nothing.
+
+That build runs on the **CPU**. If you have an NVIDIA GPU, the app offers a one-click
+download of the CUDA runtime from inside the window.
 
 ### Windows, from source (this is the GPU path)
 
@@ -114,12 +121,43 @@ ticked during setup.
 ```bash
 ./setup.sh          # CPU only
 ./setup.sh --gpu    # NVIDIA GPU: also installs the CUDA runtime libraries
-./run.sh            # starts the app and opens it in a browser
+./run.sh            # starts the app
 ```
+
+The native window on Linux and macOS needs pywebview's GTK or Qt backend
+(`python3-gi` and `gir1.2-webkit2-4.1` on Debian and Ubuntu). Without one the app says
+so and opens in your browser instead — the Windows build is the one that is guaranteed
+browser-free.
 
 The first transcription downloads the model (~3 GB for `large-v3`) into `data/models/`.
 Later runs start immediately, and the app works offline from then on. If port 8000 is
 already taken the app moves to the next free one and tells you which.
+
+### Is it really offline?
+
+The transcription is, always: your audio is decoded on this machine and never leaves it.
+Two things do need the network, both one-off and both optional:
+
+| What | When | Size |
+|---|---|---|
+| The speech model | Before the first transcription | ~3 GB |
+| The WebView2 runtime | First launch, only if Windows lacks it | ~2 MB |
+| The CUDA runtime | Only if you ask for GPU acceleration | ~1.2 GB |
+
+After those, you can pull the network cable and the app works exactly the same. To set
+up a machine that will never have internet, copy the whole `data/models/` folder from a
+machine that has already downloaded the model, or point `TA_MODEL_DIR` at it.
+
+### Choosing how it opens
+
+`TA_UI` decides where the interface goes:
+
+| Value | Behaviour |
+|---|---|
+| `auto` *(default)* | Native window, falling back to the browser if that fails |
+| `window` | Native window only; report an error rather than opening a browser |
+| `browser` | Hand the address to your default browser |
+| `none` | Serve only, open nothing |
 
 ## What it accepts
 
@@ -206,10 +244,13 @@ app/
   cleanup.py                 hallucination filter and text tidying
   formats.py                 txt / tagged / srt / vtt / json exports
   engines/local_whisper.py   the language router — the core of the app
+  desktop.py                 the native window, and the browser fallback
+  webview2.py                detects and installs the WebView2 runtime
   static/                    interface (English)
 data/
   uploads/                   uploaded media
   models/                    downloaded Whisper weights
+  logs/app.log               what the window-less build would have printed
 
 launcher.py                  entry point for the packaged Windows build
 transcriber.spec             PyInstaller build definition
@@ -239,9 +280,12 @@ your recordings. If routing leans the wrong way on your material, raise
 The `.exe` is built on a Windows runner by
 [`.github/workflows/build-windows.yml`](.github/workflows/build-windows.yml) — PyInstaller
 cannot cross-compile, so it cannot be produced from Linux or macOS. Push a `v*` tag, or
-run the workflow by hand from the Actions tab. The workflow launches the packaged app and
-checks it answers on `/api/system` before publishing, so a broken build fails CI rather
-than reaching a release.
+run the workflow by hand from the Actions tab. Before publishing, the workflow launches
+the packaged app and checks three things: that it answers on `/api/system`, that a real
+upload reaches the data folder beside the executable, and that the build still carries a
+working window backend. That last check matters most — PyInstaller can quietly drop
+pywebview's interop assemblies, and the result would be an app that silently falls back
+to a browser on the user's machine. A build that does is failed rather than released.
 
 To build on your own Windows machine:
 
@@ -255,5 +299,7 @@ megabytes on every launch.
 
 ## Privacy
 
-Files stay in `data/uploads/` on this machine. The server binds to `127.0.0.1`, so it is
-not reachable from the network. Delete `data/` to remove everything.
+Files stay in `data/uploads/` on this machine. There is still a local server behind the
+window — that is how the interface talks to the transcriber — but it binds to
+`127.0.0.1`, so nothing else on the network can reach it. Delete `data/` to remove
+everything, including the transcripts, the downloaded model and the window's own cache.

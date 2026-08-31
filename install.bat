@@ -31,6 +31,7 @@ if /i "%~1"=="gpu" (
 
 echo.
 echo Setup finished. Start the app by double-clicking run.bat
+echo The app opens in its own window -- no browser needed.
 pause
 exit /b 0
 

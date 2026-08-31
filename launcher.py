@@ -1,57 +1,65 @@
 """Entry point for the packaged Windows build.
 
-Starts the local server, opens a browser at it, and keeps the console window
-around long enough to read if something goes wrong.
+Starts the local server on a background thread and draws the interface in a
+native desktop window. There is no browser in the picture and, once the speech
+model has been fetched, no network either.
+
+The packaged build has no console, so everything that would have been printed
+goes to data/logs/app.log instead, and anything fatal also raises a message box
+— otherwise a failed start would look like nothing happening at all.
+
+The orchestration itself lives in app.desktop.run, which `python -m app.main`
+calls too, so a source checkout and the executable behave the same way.
 """
 from __future__ import annotations
 
 import multiprocessing
 import sys
-import threading
-import time
-import webbrowser
+import traceback
 
 
-def main() -> None:
+def main() -> int:
     # PyInstaller re-executes the program for each child process; without this the
     # app would relaunch itself in a loop.
     multiprocessing.freeze_support()
 
-    import uvicorn
+    from app import desktop
+    from app.main import app
 
-    from app.config import DATA_DIR, HOST, PORT
-    from app.main import _free_port, app
-
-    port = _free_port(HOST, PORT)
-    url = f"http://{HOST}:{port}"
-
-    print("=" * 66)
-    print("  Mixed Russian / Kazakh Transcriber")
-    print("=" * 66)
-    print(f"  Open:      {url}")
-    print(f"  Your data: {DATA_DIR}")
-    print()
-    print("  The first transcription downloads the speech model (about 3 GB).")
-    print("  Leave this window open while you work. Close it to quit.")
-    print("=" * 66)
-    print()
-
-    def open_browser() -> None:
-        time.sleep(1.5)
-        try:
-            webbrowser.open(url)
-        except Exception:
-            pass
-
-    threading.Thread(target=open_browser, daemon=True).start()
-
-    try:
-        uvicorn.run(app, host=HOST, port=port, log_level="warning")
-    except Exception as exc:
-        print(f"\n  The server stopped with an error: {type(exc).__name__}: {exc}\n")
-        input("  Press Enter to close this window. ")
-        sys.exit(1)
+    # desktop.run redirects stdout and stderr to the log itself, which this
+    # console-less build depends on.
+    return desktop.run(app)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        sys.exit(main())
+    except SystemExit:
+        raise
+    except Exception as exc:
+        # This handler also covers a failure to import the app at all, so it
+        # cannot assume the log redirection ever ran: without a console,
+        # sys.stderr is still None here and printing would raise in its turn.
+        detail = "".join(traceback.format_exception(exc))
+        try:
+            from app.config import LOG_DIR
+
+            LOG_DIR.mkdir(parents=True, exist_ok=True)
+            with (LOG_DIR / "app.log").open("a", encoding="utf-8") as fh:
+                fh.write(detail)
+        except Exception:
+            pass
+        if sys.stderr is not None:
+            sys.stderr.write(detail)
+
+        try:
+            from app.desktop import alert
+        except Exception:
+            import ctypes
+
+            def alert(title, message):
+                if sys.platform == "win32":
+                    ctypes.windll.user32.MessageBoxW(None, message, title, 0x10)
+
+        alert("Transcriber stopped with an error", f"{type(exc).__name__}: {exc}")
+        sys.exit(1)

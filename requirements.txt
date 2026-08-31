@@ -1,7 +1,15 @@
 # --- Web server ---
+# Local only: the interface talks to it over 127.0.0.1, nothing is exposed.
 fastapi>=0.115
 uvicorn[standard]>=0.32
 python-multipart>=0.0.12
+
+# --- Native desktop window ---
+# Draws the interface in its own window instead of a browser tab. On Windows it
+# renders through WebView2 and pulls in pythonnet; elsewhere it uses GTK or Qt,
+# and the app falls back to the browser when neither is present.
+pywebview>=5.3
+pythonnet>=3.0.4 ; sys_platform == "win32"
 
 # --- Audio ---
 imageio-ffmpeg>=0.5.1      # ships a static ffmpeg binary, no system install needed

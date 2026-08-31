@@ -35,7 +35,7 @@ jobs:
 
       # The launcher is bundled without the CUDA libraries, which would add
       # roughly 2 GB and push the download past what a release asset allows.
-      # It runs on the CPU; install.bat gpu is the path for GPU acceleration.
+      # It runs on the CPU; the app offers a one-click GPU download instead.
       - name: Stage the release folder
         shell: pwsh
         run: |
@@ -44,26 +44,38 @@ jobs:
           Mixed Russian / Kazakh Transcriber
           ==================================
 
-          Double-click RU-KK-Transcriber.exe. A console window opens and your
-          browser follows a moment later. Keep the console open while you work.
+          Double-click RU-KK-Transcriber.exe. The app opens in its own window.
+          There is no browser and nothing to install first.
+
+          The window is drawn by the Microsoft WebView2 runtime, which Windows 11
+          and most of Windows 10 already have. If yours does not, the app fetches
+          it from Microsoft on the first launch -- about 2 MB, no admin rights.
 
           The first transcription downloads the speech model (about 3 GB) into a
-          "data" folder next to the executable. After that the app works offline.
+          "data" folder next to the executable. After that the app is fully
+          offline: no account, no internet, nothing leaves this computer.
+
+          If anything goes wrong, data\logs\app.log next to the executable says
+          what.
 
           This build runs on the CPU, which is roughly real time on the large
-          model. For GPU acceleration, clone the repository and use
-          "install.bat gpu" instead -- see README.md.
+          model. If you have an NVIDIA GPU, the app offers a one-click download
+          of the CUDA runtime -- see README.md.
           "@ | Out-File -Encoding utf8 dist/RU-KK-Transcriber/READ-ME-FIRST.txt
 
-      - name: Check the build actually starts
+      # TA_UI=none keeps the app headless for both checks below. The runner has
+      # no interactive desktop to put a window on, and a window nobody can close
+      # would hang the job.
+      - name: Check the build starts and carries a window backend
         shell: pwsh
+        env:
+          TA_UI: none
         run: |
-          # Capture the app's own output so a startup crash is readable here
-          # instead of showing up only as a timeout.
-          $p = Start-Process -PassThru -FilePath dist/RU-KK-Transcriber/RU-KK-Transcriber.exe `
-                 -RedirectStandardOutput app-stdout.txt -RedirectStandardError app-stderr.txt
+          $exe = "dist/RU-KK-Transcriber/RU-KK-Transcriber.exe"
+          $log = "dist/RU-KK-Transcriber/data/logs/app.log"
+          $p = Start-Process -PassThru -FilePath $exe
 
-          $ok = $false
+          $info = $null
           for ($i = 0; $i -lt 20; $i++) {
             Start-Sleep -Seconds 3
             if ($p.HasExited) { break }
@@ -71,34 +83,44 @@ jobs:
               try {
                 $r = Invoke-WebRequest "http://127.0.0.1:$port/api/system" -TimeoutSec 3 -UseBasicParsing
                 if ($r.StatusCode -eq 200) {
-                  $ok = $true
+                  $info = $r.Content | ConvertFrom-Json
                   Write-Host "Answered on port $port."
-                  Write-Host $r.Content
                   break
                 }
               } catch { }
             }
-            if ($ok) { break }
+            if ($info) { break }
           }
 
           Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
 
-          Write-Host "--- the app's stdout ---"
-          if (Test-Path app-stdout.txt) { Get-Content app-stdout.txt }
-          Write-Host "--- the app's stderr ---"
-          if (Test-Path app-stderr.txt) { Get-Content app-stderr.txt }
+          # The build has no console, so its output lives in the log file.
+          Write-Host "--- data/logs/app.log ---"
+          if (Test-Path $log) { Get-Content $log } else { Write-Host "(no log written)" }
 
-          if (-not $ok) { throw "The packaged app did not serve /api/system." }
-          Write-Host "The packaged app started and answered."
+          if (-not $info) { throw "The packaged app did not serve /api/system." }
+
+          # The whole point of this release is that it needs no browser, so a
+          # build whose window backend did not survive packaging is a failure
+          # even though the server answers perfectly well.
+          $d = $info.desktop
+          Write-Host "Desktop backend: $($d | ConvertTo-Json -Compress)"
+          if (-not $d.native_window) {
+            throw "The packaged build cannot open a native window: $($d.reason)"
+          }
+          Write-Host "The packaged app started, and its window backend is $($d.backend)."
 
       - name: Check an upload reaches disk
         shell: pwsh
+        env:
+          TA_UI: none
         run: |
           # /api/system is a GET, so it exercises neither multipart parsing nor the
           # frozen build's data directory — which sits next to the executable and
           # has to be writable. Post a real file to cover both.
-          $p = Start-Process -PassThru -FilePath dist/RU-KK-Transcriber/RU-KK-Transcriber.exe `
-                 -RedirectStandardOutput up-stdout.txt -RedirectStandardError up-stderr.txt
+          $exe = "dist/RU-KK-Transcriber/RU-KK-Transcriber.exe"
+          $log = "dist/RU-KK-Transcriber/data/logs/app.log"
+          $p = Start-Process -PassThru -FilePath $exe
 
           # One second of silent 16 kHz mono PCM.
           $sr = 16000; $dataLen = $sr * 2
@@ -126,17 +148,22 @@ jobs:
             if ($base) { break }
           }
           if (-not $base) {
-            Get-Content up-stdout.txt, up-stderr.txt -ErrorAction SilentlyContinue
+            if (Test-Path $log) { Get-Content $log }
             Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
             throw "The app did not come up for the upload check."
           }
 
           try {
             $resp = Invoke-RestMethod "$base/api/upload" -Method Post -Form @{ file = Get-Item probe.wav }
+            # Exports are what the desktop window saves through a native dialog,
+            # so the endpoint behind that has to work in the packaged build too.
+            $seg = '[{"start":0.0,"end":1.0,"text":"тест","language":"kk"}]'
+            $srt = Invoke-RestMethod "$base/api/export" -Method Post -Form @{
+              job_id = $resp.job_id; fmt = "srt"; segments = $seg }
           } catch {
-            Get-Content up-stdout.txt, up-stderr.txt -ErrorAction SilentlyContinue
+            if (Test-Path $log) { Get-Content $log }
             Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
-            throw "Upload failed: $_"
+            throw "Upload or export failed: $_"
           }
           Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
 
@@ -145,9 +172,17 @@ jobs:
           if ([math]::Abs($resp.duration - 1.0) -gt 0.2) {
             throw "Expected a 1 s file, got $($resp.duration) s -- the bundled ffmpeg did not decode it."
           }
+          if ($srt -notmatch "00:00:00,000") { throw "The SRT export came back wrong: $srt" }
+          Write-Host "Export produced valid SRT."
           $stored = Get-ChildItem dist/RU-KK-Transcriber/data/uploads -ErrorAction SilentlyContinue
           if (-not $stored) { throw "Nothing was written to the data folder beside the executable." }
           Write-Host "Stored beside the exe: $($stored.Name -join ', ')"
+
+      # The smoke tests leave uploads, logs and a probe file behind; shipping
+      # them would put someone else's test data in the download.
+      - name: Clean up what the checks wrote
+        shell: pwsh
+        run: Remove-Item -Recurse -Force dist/RU-KK-Transcriber/data -ErrorAction SilentlyContinue
 
       - name: Zip
         shell: pwsh
@@ -165,7 +200,14 @@ jobs:
           files: RU-KK-Transcriber-windows.zip
           body: |
             Download `RU-KK-Transcriber-windows.zip`, unzip it, and double-click
-            `RU-KK-Transcriber.exe`. No Python install needed.
+            `RU-KK-Transcriber.exe`. No Python, no browser, nothing to install.
 
-            This build runs on the CPU. For GPU acceleration, clone the repository
-            and run `install.bat gpu`.
+            The app opens in its own window. Windows 11 and most Windows 10
+            machines already have the WebView2 runtime it draws with; if yours
+            does not, the app fetches it from Microsoft on the first launch.
+
+            The first transcription downloads the speech model (about 3 GB).
+            Everything after that runs offline on your own computer.
+
+            This build runs on the CPU. If you have an NVIDIA GPU, the app can
+            download the CUDA runtime for you in one click.

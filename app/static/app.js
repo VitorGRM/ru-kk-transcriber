@@ -38,6 +38,15 @@ async function boot() {
   refreshGpu();
 }
 
+/* pywebview injects its bridge asynchronously and announces it with this event.
+   Its presence is how the page knows it is in the desktop window rather than a
+   browser tab — which changes what "Download" actually means. */
+window.addEventListener('pywebviewready', () => {
+  document.body.classList.add('desktop');
+  const label = document.querySelector('.exports .lbl');
+  if (label) label.textContent = 'Save as';
+});
+
 /* ------------------------------------------------------------------ */
 /* GPU runtime                                                         */
 /* ------------------------------------------------------------------ */
@@ -566,12 +575,12 @@ document.querySelectorAll('.exports button').forEach((btn) => {
 
 async function exportAs(fmt) {
   const stem = (state.filename || 'transcript').replace(/\.[^.]+$/, '');
+  const btn = document.querySelector(`.exports button[data-fmt="${fmt}"]`);
 
   // The text box is the authority for plain-text exports, so manual edits there
   // are never silently dropped.
   if ((fmt === 'txt' || fmt === 'tagged') && state.textDirty) {
-    download(new Blob([$('#transcript').value], { type: 'text/plain;charset=utf-8' }),
-             `${stem}.txt`);
+    await save($('#transcript').value, `${stem}.txt`, 'text/plain;charset=utf-8', btn);
     return;
   }
 
@@ -583,10 +592,32 @@ async function exportAs(fmt) {
   try {
     const res = await fetch('/api/export', { method: 'POST', body: fd });
     if (!res.ok) throw new Error((await res.json()).detail || 'Export failed.');
-    download(await res.blob(), `${stem}.${fmt === 'tagged' ? 'txt' : fmt}`);
+    const mime = res.headers.get('content-type') || 'text/plain;charset=utf-8';
+    await save(await res.text(), `${stem}.${fmt === 'tagged' ? 'txt' : fmt}`, mime, btn);
   } catch (err) {
     showError(err.message);
   }
+}
+
+/* Every export is text, so both paths below take a string.
+
+   In the desktop window there is nothing to download *to* — the page is not in
+   a browser and has no Downloads folder of its own. It hands the text to Python
+   instead, which opens the system Save dialog. In a browser the old anchor
+   trick still applies. */
+async function save(text, name, mime, btn) {
+  if (window.pywebview && window.pywebview.api && window.pywebview.api.save_text) {
+    try {
+      const path = await window.pywebview.api.save_text(name, text);
+      if (path) flash(btn, 'Saved');
+      return;
+    } catch (err) {
+      // Fall through: a browser download is better than losing the export.
+      console.warn('Native save failed, falling back to a download.', err);
+    }
+  }
+  download(new Blob([text], { type: mime }), name);
+  flash(btn, 'Saved');
 }
 
 function download(blob, name) {
@@ -598,6 +629,18 @@ function download(blob, name) {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/* Briefly swap a button's label, the same acknowledgement "Copy all" gives. */
+function flash(btn, label) {
+  if (!btn || btn.dataset.flashing) return;
+  const original = btn.textContent;
+  btn.dataset.flashing = '1';
+  btn.textContent = label;
+  setTimeout(() => {
+    btn.textContent = original;
+    delete btn.dataset.flashing;
+  }, 1400);
 }
 
 /* ------------------------------------------------------------------ */

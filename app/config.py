@@ -24,7 +24,15 @@ load_dotenv(BASE_DIR / ".env")
 DATA_DIR = Path(os.getenv("TA_DATA_DIR", BASE_DIR / "data"))
 UPLOAD_DIR = DATA_DIR / "uploads"
 MODEL_DIR = Path(os.getenv("TA_MODEL_DIR", DATA_DIR / "models"))
-for _d in (DATA_DIR, UPLOAD_DIR, MODEL_DIR):
+LOG_DIR = DATA_DIR / "logs"
+
+# Where the Save dialog opens by default. The user's own Downloads folder if it
+# exists, so exports land somewhere they will think to look for them.
+_downloads = Path.home() / "Downloads"
+DOWNLOAD_DIR = Path(os.getenv("TA_DOWNLOAD_DIR", _downloads if _downloads.is_dir()
+                              else DATA_DIR / "exports"))
+
+for _d in (DATA_DIR, UPLOAD_DIR, MODEL_DIR, LOG_DIR, DOWNLOAD_DIR):
     _d.mkdir(parents=True, exist_ok=True)
 
 # --- Audio ---------------------------------------------------------------
@@ -45,3 +53,10 @@ DEFAULT_DEVICE = os.getenv("TA_DEVICE", "auto")
 
 HOST = os.getenv("TA_HOST", "127.0.0.1")
 PORT = int(os.getenv("TA_PORT", "8000"))
+
+# --- How the interface is shown ------------------------------------------
+#   auto     native desktop window, falling back to the browser if it fails
+#   window   native window only; fail loudly rather than opening a browser
+#   browser  hand the URL to the default browser (the pre-1.1 behaviour)
+#   none     serve only, open nothing — used by the CI smoke test
+UI_MODE = os.getenv("TA_UI", "auto").strip().lower()

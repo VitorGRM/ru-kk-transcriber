@@ -19,7 +19,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import cuda_setup, formats
+from . import cuda_setup, desktop, formats
 from .audio import load_audio, probe_duration
 from .config import (BUNDLE_DIR, DEFAULT_COMPUTE_TYPE, DEFAULT_DEVICE,
                      DEFAULT_LOCAL_MODEL, LANGUAGE_NAMES, MAX_UPLOAD_MB, MODEL_DIR,
@@ -97,6 +97,10 @@ def system_info() -> dict:
         },
         "cached_models": cached,
         "max_upload_mb": MAX_UPLOAD_MB,
+        # Lets the CI smoke test confirm the packaged build really carries a
+        # working window backend, rather than silently shipping one that would
+        # fall back to a browser on the user's machine.
+        "desktop": desktop.probe(),
     }
 
 
@@ -404,15 +408,16 @@ def _free_port(host: str, preferred: int, attempts: int = 20) -> int:
 
 
 def main() -> None:
-    import uvicorn
+    """Run the app the same way the packaged executable does.
 
-    from .config import HOST, PORT
+    Set TA_UI=browser for the pre-1.1 behaviour, or TA_UI=none to serve without
+    opening any interface at all.
+    """
+    import sys
 
-    port = _free_port(HOST, PORT)
-    if port != PORT:
-        print(f"\n  Port {PORT} is in use — starting on {port} instead.")
-    print(f"\n  RU/KK Mixed-Speech Transcriber → http://{HOST}:{port}\n")
-    uvicorn.run(app, host=HOST, port=port, log_level="info")
+    from . import desktop
+
+    sys.exit(desktop.run(app))
 
 
 if __name__ == "__main__":
