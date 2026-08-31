@@ -35,7 +35,110 @@ async function boot() {
     showError('Could not reach the local server: ' + err.message);
   }
   updateRoutingHint();
+  refreshGpu();
 }
+
+/* ------------------------------------------------------------------ */
+/* GPU runtime                                                         */
+/* ------------------------------------------------------------------ */
+async function refreshGpu() {
+  let g;
+  try {
+    g = await (await fetch('/api/gpu/status')).json();
+  } catch {
+    return;
+  }
+
+  const box = $('#gpubox');
+  const title = $('#gpu-title');
+  const body = $('#gpu-body');
+  const btn = $('#gpu-install');
+
+  // Nothing useful to say to someone without an NVIDIA GPU.
+  if (!g.gpu_present) { box.hidden = true; return; }
+
+  box.hidden = false;
+
+  if (g.installed) {
+    box.classList.add('ready');
+    btn.hidden = true;
+    title.textContent = `GPU acceleration is on — ${g.gpu_name}`;
+    body.textContent = `The CUDA runtime is installed (${fmtGb(g.bytes_on_disk)}). `
+                     + 'Transcription runs on the GPU, which is many times faster '
+                     + 'than the CPU on the large model.';
+    return;
+  }
+
+  box.classList.remove('ready');
+
+  if (!g.supported) {
+    btn.hidden = true;
+    title.textContent = `${g.gpu_name} found, but not set up for GPU use`;
+    body.textContent = 'Automatic setup is Windows-only. On Linux or macOS, '
+                     + 'run ./setup.sh --gpu to install the CUDA libraries.';
+    return;
+  }
+
+  btn.hidden = false;
+  btn.disabled = false;
+  const vram = g.vram_mb ? ` with ${(g.vram_mb / 1024).toFixed(1)} GB of VRAM` : '';
+  title.textContent = `${g.gpu_name} detected${vram}`;
+  body.textContent = `Transcription currently runs on the CPU. Setting up the GPU `
+                   + `downloads about ${g.estimated_download_mb} MB once — no `
+                   + `Python, no CUDA toolkit, no admin rights needed.`;
+}
+
+function fmtGb(bytes) {
+  return bytes > 1073741824
+    ? (bytes / 1073741824).toFixed(1) + ' GB'
+    : Math.round(bytes / 1048576) + ' MB';
+}
+
+$('#gpu-install').addEventListener('click', async () => {
+  const btn = $('#gpu-install');
+  btn.disabled = true;
+  btn.textContent = 'Setting up…';
+  $('#gpu-bar').hidden = false;
+  $('#gpu-status').hidden = false;
+  $('#gpu-status').textContent = 'Starting…';
+
+  try {
+    const res = await fetch('/api/gpu/install', { method: 'POST' });
+    if (!res.ok) throw new Error((await res.json()).detail || 'Could not start.');
+  } catch (err) {
+    showError(err.message);
+    btn.disabled = false;
+    btn.textContent = 'Enable GPU acceleration';
+    return;
+  }
+
+  const es = new EventSource('/api/gpu/progress');
+  es.onmessage = (ev) => {
+    const e = JSON.parse(ev.data);
+    if (e.percent != null) $('#gpu-bar-fill').style.width = e.percent + '%';
+    if (e.message) $('#gpu-status').textContent = e.message;
+
+    if (e.stage === 'done') {
+      es.close();
+      $('#gpu-bar-fill').style.width = '100%';
+      refreshGpu();
+      // The device menu was showing CPU-only advice until now.
+      $('#device-hint').textContent =
+        'GPU acceleration is ready. Quantisation is chosen to fit the card.';
+    } else if (e.stage === 'error') {
+      es.close();
+      showError(e.message);
+      btn.disabled = false;
+      btn.textContent = 'Retry GPU setup';
+      $('#gpu-bar').hidden = true;
+    }
+  };
+  es.onerror = () => {
+    es.close();
+    btn.disabled = false;
+    btn.textContent = 'Retry GPU setup';
+  };
+});
 
 function renderHardware(info) {
   const gpu = info.hardware.gpu;

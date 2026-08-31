@@ -19,7 +19,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import formats
+from . import cuda_setup, formats
 from .audio import load_audio, probe_duration
 from .config import (BUNDLE_DIR, DEFAULT_COMPUTE_TYPE, DEFAULT_DEVICE,
                      DEFAULT_LOCAL_MODEL, LANGUAGE_NAMES, MAX_UPLOAD_MB, MODEL_DIR,
@@ -289,6 +289,74 @@ async def export(job_id: str = Form(...), fmt: str = Form("txt"),
     )
 
 
+@app.get("/api/gpu/status")
+def gpu_status() -> dict:
+    return cuda_setup.status()
+
+
+_GPU_INSTALL = {"running": False, "events": None, "error": "", "done": False}
+
+
+@app.post("/api/gpu/install")
+def gpu_install() -> dict:
+    """Fetch the CUDA runtime so the packaged app can use the GPU."""
+    if _GPU_INSTALL["running"]:
+        raise HTTPException(409, "The GPU runtime is already being installed.")
+    if not cuda_setup.supported():
+        raise HTTPException(
+            400,
+            "The automatic installer is Windows-only. On Linux or macOS run "
+            "./setup.sh --gpu instead.",
+        )
+
+    _GPU_INSTALL.update(running=True, events=queue.Queue(), error="", done=False)
+
+    def worker() -> None:
+        try:
+            cuda_setup.install(lambda e: _GPU_INSTALL["events"].put(e))
+            _GPU_INSTALL["done"] = True
+            # A model already loaded on the CPU has to go, so the next run picks
+            # the GPU up.
+            global _ENGINE, _ENGINE_KEY
+            with _ENGINE_LOCK:
+                if _ENGINE is not None:
+                    _ENGINE.unload()
+                _ENGINE, _ENGINE_KEY = None, None
+        except Exception as exc:
+            _GPU_INSTALL["error"] = f"{type(exc).__name__}: {exc}"
+            _GPU_INSTALL["events"].put({"stage": "error", "message": _GPU_INSTALL["error"]})
+        finally:
+            _GPU_INSTALL["running"] = False
+
+    threading.Thread(target=worker, daemon=True).start()
+    return {"status": "running"}
+
+
+@app.get("/api/gpu/progress")
+async def gpu_progress() -> StreamingResponse:
+    events = _GPU_INSTALL["events"]
+    if events is None:
+        raise HTTPException(404, "No GPU installation has been started.")
+
+    async def stream():
+        loop = asyncio.get_running_loop()
+        while True:
+            try:
+                event = await loop.run_in_executor(None, events.get, True, 30)
+            except queue.Empty:
+                yield ": keep-alive\n\n"
+                if not _GPU_INSTALL["running"]:
+                    break
+                continue
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            if event.get("stage") in ("done", "error"):
+                break
+
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no"})
+
+
 @app.get("/api/audio/{job_id}")
 def audio_file(job_id: str) -> FileResponse:
     job = JOBS.get(job_id)
@@ -305,6 +373,10 @@ def delete_job(job_id: str) -> dict:
     job.path.unlink(missing_ok=True)
     return {"deleted": job_id}
 
+
+# If a previous session already downloaded the CUDA runtime, put it on the DLL
+# search path now — it has to be there before CTranslate2 opens a GPU model.
+cuda_setup.enable_dll_path()
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 

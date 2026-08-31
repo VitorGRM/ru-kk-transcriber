@@ -76,6 +76,21 @@
       </label>
     </div>
 
+    <div class="gpubox" id="gpubox" hidden>
+      <div class="gpu-head">
+        <span class="gpu-icon" aria-hidden="true">&#9889;</span>
+        <div class="gpu-copy">
+          <strong id="gpu-title"></strong>
+          <p id="gpu-body"></p>
+        </div>
+        <button type="button" class="primary compact" id="gpu-install">
+          Enable GPU acceleration
+        </button>
+      </div>
+      <div class="bar" id="gpu-bar" hidden><div class="bar-fill" id="gpu-bar-fill"></div></div>
+      <p class="status" id="gpu-status" hidden></p>
+    </div>
+
     <details class="advanced">
       <summary>Advanced</summary>
       <div class="grid">
