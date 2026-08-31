@@ -14,6 +14,11 @@ for pkg in ("faster_whisper", "ctranslate2", "onnxruntime", "av",
     binaries += b
     hiddenimports += h
 
+# FastAPI imports python-multipart dynamically and raises at *route definition*
+# time when it is absent, so a build without it dies on import of app.main
+# rather than failing later on an upload. Static analysis cannot see it.
+hiddenimports += ["multipart", "python_multipart"]
+
 datas += [("app/static", "app/static")]
 
 # uvicorn resolves these by name at runtime, so they are invisible to static analysis.
